@@ -27,20 +27,29 @@ BUDGET = None  # monthly USD budget, set by serve --budget
 MTOK = 1e6
 
 # USD per million tokens: (input, output, cache read). First match wins.
-# Edit when prices change: https://platform.claude.com/docs/en/about-claude/pricing
+# Checked against https://platform.claude.com/docs/en/about-claude/pricing on 2026-11-17.
+# Haiku 3 is not on that page, so its row is unverified.
 PRICES = [
+    (r"fable-5-2|mythos-5-2", (8.0, 40.0, 0.20)),
     (r"fable-5-1|mythos-5-1", (10.0, 50.0, 0.25)),
     (r"fable|mythos", (10.0, 50.0, 1.0)),
     (r"opus-4-[01]\b|opus-4-2025|opus-3", (15.0, 75.0, 1.5)),
+    (r"opus-5-5", (4.0, 20.0, 0.20)),
     (r"opus", (5.0, 25.0, 0.5)),
+    (r"sonnet-5-5", (2.0, 10.0, 0.10)),
     (r"sonnet-5", (2.0, 10.0, 0.2)),
     (r"sonnet", (3.0, 15.0, 0.3)),
     (r"haiku-3", (0.8, 4.0, 0.08)),
+    (r"haiku-5-5", (0.10, 0.50, 0.01)),
     (r"haiku", (1.0, 5.0, 0.1)),
     (r"", (5.0, 25.0, 0.5)),
 ]
+LONG_PROMPT_PRICES = [
+    (r"haiku-5-5", 100_000, (0.50, 2.50, 0.05)),
+]
 CACHE_WRITE_5M, CACHE_WRITE_1H = 1.25, 2.0  # multiples of the input price
 FAST_MODE = 2.0
+US_RESIDENCY_MULTIPLIER = 1.1
 
 FAMILIES = ("fable", "opus", "sonnet", "haiku")
 FAMILY_RULES = [("fable", r"fable|mythos"), ("sonnet", r"sonnet"), ("haiku", r"haiku"), ("opus", r"")]
@@ -53,19 +62,28 @@ def family_of(model):
     return next(family for family, pattern in FAMILY_RULES if re.search(pattern, model))
 
 
-def prices_of(model):
+def prices_of(model, prompt_tokens):
+    for pattern, threshold, prices in LONG_PROMPT_PRICES:
+        if prompt_tokens > threshold and re.search(pattern, model):
+            return prices
     return next(prices for pattern, prices in PRICES if re.search(pattern, model))
 
 
 def call_costs(model, usage):
     """USD per token kind, plus what the cache reads would have cost extra at the input price."""
-    price_in, price_out, price_read = (p / MTOK for p in prices_of(model))
-    if usage.get("speed") == "fast":
-        price_in, price_out, price_read = price_in * FAST_MODE, price_out * FAST_MODE, price_read * FAST_MODE
+    reads = usage.get("cache_read_input_tokens") or 0
+    written = usage.get("cache_creation_input_tokens") or 0
     writes = usage.get("cache_creation") or {}
     write_1h = writes.get("ephemeral_1h_input_tokens", 0)
-    write_5m = (usage.get("cache_creation_input_tokens") or 0) - write_1h
-    reads = usage.get("cache_read_input_tokens") or 0
+    write_5m = written - write_1h
+    prompt_tokens = (usage.get("input_tokens") or 0) + reads + written
+    price_in, price_out, price_read = (p / MTOK for p in prices_of(model, prompt_tokens))
+    scale = 1.0
+    if usage.get("speed") == "fast":
+        scale *= FAST_MODE
+    if usage.get("inference_geo") == "us":
+        scale *= US_RESIDENCY_MULTIPLIER
+    price_in, price_out, price_read = price_in * scale, price_out * scale, price_read * scale
     return {
         "c_input": (usage.get("input_tokens") or 0) * price_in,
         "c_cache_read": reads * price_read,
