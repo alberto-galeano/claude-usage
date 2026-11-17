@@ -255,6 +255,18 @@ def usage_rows(records):
     return rows
 
 
+def pid_alive(pid):
+    if not isinstance(pid, int):
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def active_sessions(records, info):
     recent_from = (datetime.now(timezone.utc) - timedelta(minutes=BURN_MINUTES)).strftime("%Y-%m-%dT%H:%M:%S")
     spend, recent, latest = defaultdict(float), defaultdict(float), {}
@@ -273,7 +285,7 @@ def active_sessions(records, info):
         except (OSError, ValueError):
             continue
         session = live.get("sessionId")
-        if not os.path.exists(f"/proc/{live.get('pid')}") or session not in latest:
+        if not pid_alive(live.get("pid")) or session not in latest:
             continue
         last, model = latest[session]
         details = info.get(session, {})
