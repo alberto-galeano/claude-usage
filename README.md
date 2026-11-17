@@ -30,6 +30,7 @@ claude-usage serve --budget 500               # also track a monthly USD budget
 ## Dashboard
 
 - Same layout as copilot-usage: filters in the URL hash, clickable bars, rows and open sessions, sortable tables, previous-window comparison, month-end projection against `--budget`, CSV export, and the theme picker under Settings.
+- The cumulative spend card always shows the current month, whatever range is selected (filters still apply). The dashed forecast is the month's daily average carried to month end, the same figure as "On pace for". With `--budget`, a budget line is drawn when it is within 2x of the forecast.
 - Model families (Fable, Opus, Sonnet, Haiku) are guessed from model names by `FAMILY_RULES`.
 - Input counts fresh, cached and cache-written tokens together, so "input from cache" is the share of the whole prompt that was a cache read. Thinking tokens are part of output.
 - The sessions table takes titles from `ai-title` events, turns and active time from `turn_duration`, compactions from `compact_boundary`, PRs from `pr-link` and lines changed from `cost-state`. Those cover the whole session, not the selected range.

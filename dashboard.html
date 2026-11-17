@@ -416,6 +416,15 @@ th button:hover, th[aria-sort] button { color: var(--text); }
     </div>
   </section>
 
+  <section class="stack">
+    <div class="card">
+      <h2>Cumulative spend this month</h2>
+      <p class="sub" id="cumulative-sub"></p>
+      <div class="legend" id="cumulative-legend"></div>
+      <div class="chart" id="cumulative"></div>
+    </div>
+  </section>
+
   <section class="grid">
     <div class="card">
       <h2 id="daily-title">Daily spend by model family</h2>
@@ -802,6 +811,91 @@ function renderLegend(dailyBudget) {
     items.push(item);
   }
   byId("legend").replaceChildren(...items);
+}
+
+// Same run rate as the "On pace for" KPI: month to date spend per elapsed day, carried to month end.
+function monthForecast(spentByDay, today, monthDays) {
+  const runningTotals = [0];
+  for (let day = 1; day <= today; day++) runningTotals.push(runningTotals[day - 1] + (spentByDay.get(day) || 0));
+  const spent = runningTotals[today];
+  return { runningTotals, spent, projected: spent / today * monthDays };
+}
+
+function renderCumulative() {
+  const host = byId("cumulative"), legend = byId("cumulative-legend");
+  const now = new Date(), today = now.getDate();
+  const monthDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const monthStart = iso(new Date(now.getFullYear(), now.getMonth(), 1));
+  const monthLabel = now.toLocaleDateString("en-US", { month: "long" });
+
+  const spentByDay = new Map();
+  for (const r of data.rows) {
+    if (r.day < monthStart || !matches(r)) continue;
+    const day = parseDay(r.day).getDate();
+    spentByDay.set(day, (spentByDay.get(day) || 0) + r.cost);
+  }
+  const { runningTotals, spent, projected } = monthForecast(spentByDay, today, monthDays);
+  byId("cumulative-sub").textContent = spent > CENT
+    ? `Running total at API list price. The dashed line carries this month's daily average, ${money(spent / today)}, to the end of ${monthLabel}.`
+    : "";
+  if (spent <= CENT) {
+    legend.replaceChildren();
+    return host.replaceChildren(el("div", { class: "empty" }, `No spend yet in ${monthLabel}`));
+  }
+
+  const W = host.clientWidth || 600, H = 240, m = PLOT;
+  const plotW = W - m.left - m.right, plotH = H - m.top - m.bottom;
+  // A budget far above the forecast would flatten the curve, so it only joins the axis when it is in range.
+  const budgetInRange = server.budget && server.budget <= projected * 2;
+  const top = niceMax(Math.max(projected, budgetInRange ? server.budget : 0));
+  const x = day => m.left + (day / monthDays) * plotW;
+  const y = v => m.top + plotH - (v / top) * plotH;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "group", "aria-label": `Cumulative spend in ${monthLabel} with forecast` });
+
+  for (let i = 0; i <= 4; i++) {
+    const v = (top / 4) * i;
+    svg.append(s("line", { x1: m.left, x2: W - m.right, y1: y(v), y2: y(v), stroke: i ? css("grid") : css("axis") }));
+    svg.append(s("text", { x: m.left - 8, y: y(v) + 4, "text-anchor": "end" }, money(v)));
+  }
+  const labelEvery = Math.ceil(monthDays / Math.max(1, Math.floor(plotW / 60)));
+  for (let day = 1; day <= monthDays; day += labelEvery)
+    svg.append(s("text", { x: x(day), y: H - 6, "text-anchor": "middle" }, shortDay(iso(new Date(now.getFullYear(), now.getMonth(), day)))));
+
+  if (budgetInRange)
+    svg.append(s("line", { x1: m.left, x2: W - m.right, y1: y(server.budget), y2: y(server.budget),
+      stroke: css("text-2"), "stroke-dasharray": "4 4", "pointer-events": "none" }));
+
+  const actual = runningTotals.map((v, day) => `${day ? "L" : "M"}${x(day)},${y(v)}`).join("");
+  svg.append(s("path", { d: `${actual}L${x(today)},${y(0)}L${x(0)},${y(0)}Z`, fill: css("accent"), "fill-opacity": 0.12, "pointer-events": "none" }));
+  svg.append(s("path", { d: `M${x(today)},${y(spent)}L${x(monthDays)},${y(projected)}`, fill: "none",
+    stroke: css("accent"), "stroke-width": 2, "stroke-dasharray": "6 5", "stroke-linecap": "round", "pointer-events": "none" }));
+  svg.append(s("path", { class: "mark", d: actual, fill: "none", stroke: css("accent"), "stroke-width": 2, "stroke-linejoin": "round", "pointer-events": "none" }));
+  svg.append(s("circle", { cx: x(today), cy: y(spent), r: 4, fill: css("accent"), stroke: css("surface"), "stroke-width": 2, "pointer-events": "none" }));
+  svg.append(s("circle", { cx: x(monthDays), cy: y(projected), r: 4, fill: css("surface"), stroke: css("accent"), "stroke-width": 2, "pointer-events": "none" }));
+
+  const dayWidth = plotW / monthDays;
+  for (let day = 1; day <= monthDays; day++) {
+    const forecast = day > today;
+    const total = forecast ? spent + (projected - spent) * (day - today) / (monthDays - today) : runningTotals[day];
+    const lines = forecast
+      ? [{ color: css("accent"), value: money(total), label: "forecast" }]
+      : [{ color: css("accent"), value: money(total), label: "spent so far" }, { value: money(spentByDay.get(day) || 0), label: "that day" }];
+    const hit = s("rect", { class: "hit", x: x(day) - dayWidth / 2, y: m.top, width: dayWidth, height: plotH });
+    hoverable(hit, shortDay(iso(new Date(now.getFullYear(), now.getMonth(), day))), lines);
+    svg.append(hit);
+  }
+  roving(svg);
+  host.replaceChildren(svg);
+
+  const item = (mark, text) => { const node = el("span"); node.append(mark, text); return node; };
+  const items = [
+    item(swatch(css("accent")), `Spent, ${money(spent)}`),
+    item(el("span", { class: "dash", style: `border-top-color:${css("accent")}` }), `Forecast, ${money(projected)} by month end`),
+  ];
+  if (server.budget) items.push(budgetInRange
+    ? item(el("span", { class: "dash" }), `Budget, ${money(server.budget)}`)
+    : item("", `Budget, ${money(server.budget)} (off the chart)`));
+  legend.replaceChildren(...items);
 }
 
 function renderCacheRate(rows, slots, slotOf) {
@@ -1193,6 +1287,7 @@ function render() {
   const total = totalOf(rows, "cost");
   renderKpis(rows, previous, days, byFamily);
   renderSpend(rows, days);
+  renderCumulative();
   renderBars("models", "model", dimEntries(dim("model"), rows, v => css(v.family)), total, 8);
   for (const id of ["repo", "branch", "effort", "initiator", "entrypoint", "finish", "speed"])
     renderBars("by-" + id, dim(id).label, dimEntries(dim(id), rows), total);
