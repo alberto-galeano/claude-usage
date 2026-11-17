@@ -20,7 +20,7 @@ claude-usage serve --budget 500               # also track a monthly USD budget
 ## How the numbers are derived
 
 - Transcripts record tokens, not money. Cost is tokens times the API list price from `PRICES` at the top of `claude_usage.py`. Cache writes are 1.25x the input price for the 5 minute cache and 2x for the 1 hour cache, and fast mode doubles everything. On a Pro or Max subscription this is what the usage would have cost on the API, not what you paid.
-- Checked against the `cost-state` totals Claude Code writes itself: over 82 sessions the computed total came to 99% of the logged one. Update `PRICES` when prices change, since new models fall through to the Opus rate.
+- Checked against the `cost-state` totals Claude Code writes itself. The Haiku 5.5 and Sonnet 5.5 rates match those totals exactly, and Haiku 5.5 prompts over 100K tokens are billed at 5x. Across the 13 sessions that have a `cost-state` the computed total is 90% of the logged one. The rest is spend Claude Code logs but no transcript records, which this tool can't see. Update `PRICES` when prices change, since new models fall through to the Opus rate.
 - One API response is written as several transcript lines (one per content block) that repeat the same usage, and resumed or forked sessions copy their history into a new file. Calls are deduplicated by message id, within and across files.
 - Subagent calls live in `<session>/subagents/agent-*.jsonl` and are marked `isSidechain`. They count towards the parent session.
 - A prompt is a user message that is not a tool result, a slash command, a system notice or meta. It is credited to the first model call that follows it.
